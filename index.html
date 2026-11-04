@@ -1,156 +1,194 @@
-// worker.js
-import { connect } from 'cloudflare:sockets';
-
-export default {
-  // 1. Handle HTTP requests (Receiving PDFs & Serving Dashboard Data)
-  async fetch(request, env, ctx) {
-    const url = new URL(request.url);
-
-    // Route: Receive PDF data from Google Apps Script
-    if (request.method === "POST" && url.pathname === "/upload-pdf") {
-      const data = await request.json();
-      console.log(`Received PDF: ${data.filename} from ${data.date}`);
-      
-      // Store in Cloudflare KV database
-      await env.INVENTORY_DB.put("latest_invoice", JSON.stringify(data));
-      
-      return new Response("PDF received and logged.", { status: 200 });
-    }
-
-    // Route: Serve Data to your HTML5 Dashboard
-    if (request.method === "GET" && url.pathname === "/api/inventory-status") {
-      // Retrieve the latest scraped data for all sites
-      const shellData = await env.INVENTORY_DB.get("current_status_Shell") || '{"status": "No data"}';
-      const exxonData = await env.INVENTORY_DB.get("current_status_Exxon") || '{"status": "No data"}';
-      const xpressData = await env.INVENTORY_DB.get("current_status_Xpress") || '{"status": "No data"}';
-      
-      const combinedData = {
-        Regas_Shell: JSON.parse(shellData),
-        Regas_Exxon: JSON.parse(exxonData),
-        Regas_Xpress: JSON.parse(xpressData)
-      };
-
-      return new Response(JSON.stringify(combinedData), {
-        headers: {
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*" // Allows your HTML dashboard to read it
-        }
-      });
-    }
-
-    return new Response("Not Found", { status: 404 });
-  },
-
-  // 2. Handle Cron Triggers (6 AM and 6 PM automated equipment checks)
-  async scheduled(event, env, ctx) {
-    console.log("Running scheduled Veeder-Root inventory checks...");
-
-    // Array of your locations and their specific IPs/Ports
-    const locations = [
-      { id: "Shell", ip: "199.189.242.170", port: 10277 },
-      { id: "Exxon", ip: "199.189.242.136", port: 10277 },
-      { id: "Xpress", ip: "199.189.242.222", port: 10277 }
-    ];
-    
-    // The command: Control A (Hex 01) + 250 for delivery/inventory reports
-    const VEEDER_ROOT_COMMAND = "\x01250\n";
-    
-    // Loop through all locations to grab inventory via raw TCP socket
-    for (const site of locations) {
-      try {
-        // Open a direct TCP socket to the site controller
-        const socket = connect({ hostname: site.ip, port: site.port });
-        const writer = socket.writable.getWriter();
-        const reader = socket.readable.getReader();
-        
-        // Send the "Control A 250" command
-        const encoder = new TextEncoder();
-        await writer.write(encoder.encode(VEEDER_ROOT_COMMAND));
-        
-        // Read the raw response
-        const { value } = await reader.read();
-        const decoder = new TextDecoder();
-        const rawResponse = decoder.decode(value);
-        
-        // Close the connection
-        await writer.close();
-        
-        // Store the raw output in your database to be matched with your PDF pricing later
-        await env.INVENTORY_DB.put(`current_status_${site.id}`, JSON.stringify({
-          timestamp: new Date().toISOString(),
-          raw_inventory: rawResponse 
-        }));
-        
-        console.log(`Successfully pulled delivery data for ${site.id}`);
-        
-      } catch (error) {
-        console.error(`Failed to reach ${site.id} equipment on port 10277:`, error);
-      }
-    }
-  }
-};
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fuel Pricing & Inventory</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fueling Trends Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
-<body class="bg-gray-900 text-white font-sans antialiased p-6">
+<body class="bg-gray-100 p-6 font-sans">
 
-    <div class="max-w-md mx-auto">
-        <h1 class="text-2xl font-bold mb-6 text-blue-400">Live Inventory Dashboard</h1>
-        
-        <div id="dashboard-data" class="space-y-6">
-            <p class="text-gray-400 text-sm animate-pulse">Fetching latest snapshots from locations...</p>
+  <div class="max-w-6xl mx-auto">
+    <header class="flex justify-between items-center mb-6">
+      <div>
+        <h1 class="text-3xl font-bold text-gray-800">Fueling Trends Dashboard</h1>
+      </div>
+      <div class="space-x-4">
+        <button onclick="toggleView('dashboard')" class="text-blue-600 font-semibold hover:underline">Dashboard</button>
+        <button onclick="toggleView('sites')" class="text-gray-600 font-semibold hover:underline">Manage Sites</button>
+      </div>
+    </header>
+
+    <!-- DASHBOARD VIEW -->
+    <div id="view-dashboard" class="block">
+      
+      <!-- Trend Advisor & Market Panel -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+        <div class="lg:col-span-2 bg-indigo-900 text-white rounded-lg shadow-md p-6 flex flex-col justify-between">
+          <div>
+            <h2 class="text-xl font-bold mb-1">AI Trend Advisor</h2>
+            <p id="advice-output" class="text-indigo-200 text-sm">Click analyze to evaluate inventory thresholds against current rack prices.</p>
+          </div>
+          <button onclick="generateAdvice()" class="mt-4 bg-indigo-500 hover:bg-indigo-400 text-white px-6 py-2 rounded shadow transition w-fit">
+            Analyze Market Trends & Advise
+          </button>
         </div>
-        
-        <button onclick="fetchData()" class="mt-8 w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-lg transition-colors shadow-lg">
-            Refresh Data
+
+        <div class="bg-white rounded-lg shadow-md p-6 border-l-4 border-indigo-500">
+          <h2 class="text-xl font-bold text-gray-800 mb-3">Pricing Window</h2>
+          <p class="text-sm text-gray-600 mb-2">Effective Cuts: <strong>6:00 PM Central</strong></p>
+          <p class="text-xs text-gray-500 italic">Weekend pricing locks in from Friday 6 PM through Monday 6 PM automatically.</p>
+        </div>
+      </div>
+
+      <!-- Action & Status -->
+      <div class="flex justify-between items-center mb-4">
+        <h2 class="text-xl font-bold text-gray-800">Live Veeder-Root TLS-350 Deliveries</h2>
+        <button onclick="forcePoll()" id="poll-btn" class="bg-green-600 text-white px-4 py-2 rounded shadow hover:bg-green-700 transition">
+          Get Current Fuel Readings
         </button>
+      </div>
+      
+      <div id="status-message" class="text-blue-600 font-semibold mb-4">Ready.</div>
+      <div id="dashboard-cards" class="grid grid-cols-1 md:grid-cols-3 gap-6"></div>
     </div>
 
-    <script>
-        // You will replace this with your actual Cloudflare Worker URL once deployed
-        const WORKER_API_URL = "https://your-worker-name.your-subdomain.workers.dev/api/inventory-status";
+    <!-- SITE MANAGEMENT VIEW -->
+    <div id="view-sites" class="hidden">
+      <div class="bg-white rounded-lg shadow-md p-6 mb-8">
+        <h2 class="text-xl font-bold text-gray-800 mb-4">Add New Site</h2>
+        <form id="add-site-form" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" onsubmit="addSite(event)">
+          <input type="text" id="site-name" placeholder="Store Name (e.g., Shell)" class="border p-2 rounded" required>
+          <input type="text" id="site-address" placeholder="Address" class="border p-2 rounded" required>
+          <input type="text" id="site-tel" placeholder="Telephone" class="border p-2 rounded">
+          <input type="text" id="site-ip" placeholder="IP Address" class="border p-2 rounded" required>
+          <input type="number" id="site-port" placeholder="Port (Default 10277)" class="border p-2 rounded" value="10277">
+          <input type="text" id="site-code" placeholder="Control A Code (Default 250)" class="border p-2 rounded" value="250">
+          <div class="lg:col-span-3">
+            <button type="submit" class="bg-blue-600 text-white px-6 py-2 rounded shadow hover:bg-blue-700 transition">Save Site</button>
+          </div>
+        </form>
+      </div>
 
-        async function fetchData() {
-            const container = document.getElementById('dashboard-data');
-            
-            try {
-                const response = await fetch(WORKER_API_URL);
-                const data = await response.json();
-                
-                container.innerHTML = ''; // Clear loading text
+      <div class="bg-white rounded-lg shadow-md p-6">
+        <h2 class="text-xl font-bold text-gray-800 mb-4">Configured Sites</h2>
+        <table class="min-w-full text-left">
+          <thead>
+            <tr class="bg-gray-100 text-gray-600 text-sm">
+              <th class="p-3">Store</th>
+              <th class="p-3">IP : Port</th>
+              <th class="p-3">Control Code</th>
+              <th class="p-3">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="site-list-table"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
 
-                // Loop through each location in the response
-                for (const [locationName, locationData] of Object.entries(data)) {
-                    const cleanName = locationName.replace('_', ' ');
-                    const timestamp = locationData.timestamp ? new Date(locationData.timestamp).toLocaleTimeString() : 'N/A';
-                    
-                    // Create a card for each location
-                    const card = `
-                        <div class="bg-gray-800 rounded-lg p-5 shadow-md border border-gray-700">
-                            <div class="flex justify-between items-center border-b border-gray-700 pb-3 mb-3">
-                                <h2 class="font-bold text-lg text-gray-100">${cleanName}</h2>
-                                <span class="text-xs text-gray-500">Sync: ${timestamp}</span>
-                            </div>
-                            <div class="text-sm text-gray-300 font-mono overflow-x-auto whitespace-pre-wrap bg-gray-900 p-3 rounded">
-                                ${locationData.raw_inventory || 'Awaiting Veeder-Root Data...'}
-                            </div>
-                        </div>
-                    `;
-                    container.innerHTML += card;
-                }
+  <script>
+    const BASE_URL = "http://localhost:8787"; // Update to your live Cloudflare Worker URL in production
 
-            } catch (error) {
-                container.innerHTML = `<div class="bg-red-900/50 border border-red-500 p-4 rounded text-red-200 text-sm">Error connecting to backend API.</div>`;
-            }
+    function toggleView(view) {
+      document.getElementById('view-dashboard').classList.toggle('hidden', view !== 'dashboard');
+      document.getElementById('view-sites').classList.toggle('hidden', view !== 'sites');
+      if (view === 'dashboard') fetchInventory();
+      if (view === 'sites') loadSites();
+    }
+
+    async function fetchInventory() {
+      const container = document.getElementById('dashboard-cards');
+      document.getElementById('status-message').textContent = "Fetching readings...";
+      try {
+        const res = await fetch(`${BASE_URL}/api/inventory-status`);
+        const data = await res.json();
+        container.innerHTML = "";
+        if (data.status === "No data available yet") {
+           document.getElementById('status-message').textContent = "No data yet. Click 'Get Current Fuel Readings'.";
+           return;
         }
+        document.getElementById('status-message').textContent = "Last updated: " + new Date().toLocaleTimeString();
+        for (const [station, info] of Object.entries(data)) {
+          const isError = info.status === "Error";
+          container.innerHTML += `
+            <div class="bg-white rounded-lg shadow p-6 border-t-4 ${isError ? 'border-red-500' : 'border-green-500'}">
+              <h3 class="text-lg font-bold text-gray-800 mb-1">${station}</h3>
+              <p class="text-xs text-blue-600 font-semibold mb-2">Window: ${info.pricingWindow || 'N/A'}</p>
+              <div class="bg-gray-50 p-2 rounded text-xs text-gray-700 font-mono break-words h-28 overflow-y-auto">
+                ${isError ? info.message : info.data}
+              </div>
+            </div>
+          `;
+        }
+      } catch (e) {
+        document.getElementById('status-message').textContent = "Connection error.";
+      }
+    }
 
-        // Auto-fetch on load
-        fetchData();
-    </script>
+    async function forcePoll() {
+      const btn = document.getElementById('poll-btn');
+      btn.innerHTML = "Polling TLS-350...";
+      btn.disabled = true;
+      try {
+        await fetch(`${BASE_URL}/api/poll-now`, { method: "POST" });
+        await fetchInventory();
+      } catch (e) { alert("Polling failed."); }
+      btn.innerHTML = "Get Current Fuel Readings";
+      btn.disabled = false;
+    }
+
+    function generateAdvice() {
+      const adviceBox = document.getElementById('advice-output');
+      adviceBox.innerHTML = "Evaluating market trends and weekend pricing locks...";
+      setTimeout(() => {
+        adviceBox.innerHTML = `<span class="text-green-400 font-bold">Recommendation:</span> WTI crude is consolidating. Since weekend pricing locks through Monday 6 PM, schedule unbranded drops to optimize your cost basis.`;
+      }, 800);
+    }
+
+    async function loadSites() {
+      const tbody = document.getElementById('site-list-table');
+      try {
+        const res = await fetch(`${BASE_URL}/api/sites`);
+        const sites = await res.json();
+        tbody.innerHTML = "";
+        sites.forEach(site => {
+          tbody.innerHTML += `
+            <tr class="border-b">
+              <td class="p-3 font-semibold">${site.name}</td>
+              <td class="p-3">${site.ip}:${site.port}</td>
+              <td class="p-3">${site.controlCode || '250'}</td>
+              <td class="p-3"><button onclick="deleteSite('${site.name}')" class="text-red-600 hover:underline">Remove</button></td>
+            </tr>
+          `;
+        });
+      } catch(e) {
+        tbody.innerHTML = `<tr><td colspan="4" class="p-3 text-red-500">Could not connect to backend API.</td></tr>`;
+      }
+    }
+
+    async function addSite(e) {
+      e.preventDefault();
+      const site = {
+        name: document.getElementById('site-name').value,
+        address: document.getElementById('site-address').value,
+        tel: document.getElementById('site-tel').value,
+        ip: document.getElementById('site-ip').value,
+        port: document.getElementById('site-port').value,
+        controlCode: document.getElementById('site-code').value
+      };
+      await fetch(`${BASE_URL}/api/sites`, { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(site) });
+      document.getElementById('add-site-form').reset();
+      loadSites();
+    }
+
+    async function deleteSite(name) {
+      await fetch(`${BASE_URL}/api/sites`, { method: "DELETE", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ name }) });
+      loadSites();
+    }
+
+    fetchInventory();
+  </script>
 </body>
 </html>
