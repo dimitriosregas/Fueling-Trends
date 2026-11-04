@@ -5,135 +5,190 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Fueling Trends Dashboard</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- Load Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body class="bg-gray-100 p-6 font-sans">
 
   <div class="max-w-6xl mx-auto">
-    <header class="flex justify-between items-center mb-8">
+    <header class="flex justify-between items-center mb-6">
       <div>
         <h1 class="text-3xl font-bold text-gray-800">Fueling Trends Dashboard</h1>
-        <p class="text-gray-500 mt-1">Real-time Veeder-Root Polling & Market Analytics</p>
       </div>
-      <button onclick="fetchInventory()" class="bg-blue-600 text-white px-4 py-2 rounded shadow hover:bg-blue-700 transition">
-        Refresh Live Data
-      </button>
+      <div class="space-x-4">
+        <button onclick="toggleView('dashboard')" class="text-blue-600 font-semibold hover:underline">Dashboard</button>
+        <button onclick="toggleView('sites')" class="text-gray-600 font-semibold hover:underline">Manage Sites</button>
+      </div>
     </header>
 
-    <!-- TOP ROW: Analytics & Market Trends -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+    <!-- DASHBOARD VIEW -->
+    <div id="view-dashboard" class="block">
       
-      <!-- Multi-Year Chart Panel -->
-      <div class="lg:col-span-2 bg-white rounded-lg shadow-md p-6">
-        <div class="flex justify-between items-center mb-4">
-          <h2 class="text-xl font-bold text-gray-800">Inventory Volume Trends</h2>
-          
-          <!-- Year Selection Buttons -->
-          <div class="flex space-x-2" id="year-filters">
-            <button onclick="toggleYear('2024')" id="btn-2024" class="px-3 py-1 rounded border border-gray-300 text-sm font-semibold transition bg-gray-200">2024</button>
-            <button onclick="toggleYear('2025')" id="btn-2025" class="px-3 py-1 rounded border border-blue-600 text-blue-600 text-sm font-semibold transition bg-blue-50">2025</button>
-            <button onclick="toggleYear('2026')" id="btn-2026" class="px-3 py-1 rounded border border-blue-600 bg-blue-600 text-white text-sm font-semibold transition">2026</button>
+      <!-- Trend Advisor & Market Panel -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+        <div class="lg:col-span-2 bg-indigo-900 text-white rounded-lg shadow-md p-6 flex flex-col justify-between">
+          <div>
+            <h2 class="text-xl font-bold mb-1">AI Trend Advisor</h2>
+            <p id="advice-output" class="text-indigo-200 text-sm">Click analyze to evaluate inventory thresholds against current rack prices.</p>
           </div>
+          <button onclick="generateAdvice()" class="mt-4 bg-indigo-500 hover:bg-indigo-400 text-white px-6 py-2 rounded shadow transition w-fit">
+            Analyze Market Trends & Advise
+          </button>
         </div>
-        <canvas id="trendChart" height="100"></canvas>
+
+        <div class="bg-white rounded-lg shadow-md p-6 border-l-4 border-indigo-500">
+          <h2 class="text-xl font-bold text-gray-800 mb-3">Pricing Window</h2>
+          <p class="text-sm text-gray-600 mb-2">Effective Cuts: <strong>6:00 PM Central</strong></p>
+          <p class="text-xs text-gray-500 italic">Weekend pricing locks in from Friday 6 PM through Monday 6 PM automatically.</p>
+        </div>
       </div>
 
-      <!-- Market Trends Panel -->
-      <div class="bg-white rounded-lg shadow-md p-6 border-l-4 border-indigo-500">
-        <h2 class="text-xl font-bold text-gray-800 mb-4">Current Market Trends</h2>
-        <div class="space-y-4">
-          <div class="flex justify-between pb-2 border-b">
-            <span class="text-gray-600">WTI Crude Oil</span>
-            <span class="font-bold text-red-600">$95.24 / bbl ↓</span>
-          </div>
-          <div class="flex justify-between pb-2 border-b">
-            <span class="text-gray-600">National Avg Gas</span>
-            <span class="font-bold text-green-600">$2.83 / gal ↑</span>
-          </div>
-          <div class="flex justify-between pb-2 border-b">
-            <span class="text-gray-600">Seasonal Demand</span>
-            <span class="font-bold text-gray-800">Winter-Blend</span>
-          </div>
-          <div class="mt-4 pt-2">
-            <p class="text-xs text-gray-500 italic">
-              <strong>Analysis:</strong> Drivers are currently seeing lower pump prices as winter-blend fuel enters the market and refinery maintenance concludes. However, WTI crude remains volatile near $95-$100/bbl due to ongoing geopolitical tensions in the Strait of Hormuz.
-            </p>
-          </div>
-        </div>
+      <!-- Action & Status -->
+      <div class="flex justify-between items-center mb-4">
+        <h2 class="text-xl font-bold text-gray-800">Live Veeder-Root TLS-350 Deliveries</h2>
+        <button onclick="forcePoll()" id="poll-btn" class="bg-green-600 text-white px-4 py-2 rounded shadow hover:bg-green-700 transition">
+          Get Current Fuel Readings
+        </button>
       </div>
+      
+      <div id="status-message" class="text-blue-600 font-semibold mb-4">Ready.</div>
+      <div id="dashboard-cards" class="grid grid-cols-1 md:grid-cols-3 gap-6"></div>
     </div>
 
-    <!-- BOTTOM ROW: Live Veeder-Root Cards -->
-    <h2 class="text-xl font-bold text-gray-800 mb-4">Live Tank Status</h2>
-    <div id="status-message" class="text-blue-600 font-semibold mb-4">Fetching latest Veeder-Root data...</div>
-    <div id="dashboard-cards" class="grid grid-cols-1 md:grid-cols-3 gap-6">
-      <!-- Cards injected here -->
+    <!-- SITE MANAGEMENT VIEW -->
+    <div id="view-sites" class="hidden">
+      <div class="bg-white rounded-lg shadow-md p-6 mb-8">
+        <h2 class="text-xl font-bold text-gray-800 mb-4">Add New Site</h2>
+        <form id="add-site-form" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" onsubmit="addSite(event)">
+          <input type="text" id="site-name" placeholder="Store Name (e.g., Shell)" class="border p-2 rounded" required>
+          <input type="text" id="site-address" placeholder="Address" class="border p-2 rounded" required>
+          <input type="text" id="site-tel" placeholder="Telephone" class="border p-2 rounded">
+          <input type="text" id="site-ip" placeholder="IP Address" class="border p-2 rounded" required>
+          <input type="number" id="site-port" placeholder="Port (Default 10277)" class="border p-2 rounded" value="10277">
+          <input type="text" id="site-code" placeholder="Control A Code (Default 250)" class="border p-2 rounded" value="250">
+          <div class="lg:col-span-3">
+            <button type="submit" class="bg-blue-600 text-white px-6 py-2 rounded shadow hover:bg-blue-700 transition">Save Site</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="bg-white rounded-lg shadow-md p-6">
+        <h2 class="text-xl font-bold text-gray-800 mb-4">Configured Sites</h2>
+        <table class="min-w-full text-left">
+          <thead>
+            <tr class="bg-gray-100 text-gray-600 text-sm">
+              <th class="p-3">Store</th>
+              <th class="p-3">IP : Port</th>
+              <th class="p-3">Control Code</th>
+              <th class="p-3">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="site-list-table"></tbody>
+        </table>
+      </div>
     </div>
   </div>
 
   <script>
-    const WORKER_API_URL = "http://localhost:8787/api/inventory-status";
-    
-    // --- LIVE VEEDER-ROOT DATA LOGIC ---
+    const BASE_URL = "http://localhost:8787"; // Update to your live Cloudflare Worker URL in production
+
+    function toggleView(view) {
+      document.getElementById('view-dashboard').classList.toggle('hidden', view !== 'dashboard');
+      document.getElementById('view-sites').classList.toggle('hidden', view !== 'sites');
+      if (view === 'dashboard') fetchInventory();
+      if (view === 'sites') loadSites();
+    }
+
     async function fetchInventory() {
-      const statusMsg = document.getElementById('status-message');
       const container = document.getElementById('dashboard-cards');
-      
-      statusMsg.textContent = "Fetching latest Veeder-Root data...";
-      container.innerHTML = ""; 
-
+      document.getElementById('status-message').textContent = "Fetching readings...";
       try {
-        const response = await fetch(WORKER_API_URL);
-        const data = await response.json();
-
+        const res = await fetch(`${BASE_URL}/api/inventory-status`);
+        const data = await res.json();
+        container.innerHTML = "";
         if (data.status === "No data available yet") {
-           statusMsg.textContent = "No data available in the database yet. Run the cron trigger.";
+           document.getElementById('status-message').textContent = "No data yet. Click 'Get Current Fuel Readings'.";
            return;
         }
-
-        statusMsg.textContent = "Last polled: " + new Date().toLocaleTimeString();
-
+        document.getElementById('status-message').textContent = "Last updated: " + new Date().toLocaleTimeString();
         for (const [station, info] of Object.entries(data)) {
           const isError = info.status === "Error";
-          const cardHtml = `
+          container.innerHTML += `
             <div class="bg-white rounded-lg shadow p-6 border-t-4 ${isError ? 'border-red-500' : 'border-green-500'}">
               <h3 class="text-lg font-bold text-gray-800 mb-1">${station}</h3>
-              <p class="text-sm text-gray-500 mb-3">Status: <span class="${isError ? 'text-red-600' : 'text-green-600'} font-semibold">${info.status}</span></p>
-              <div class="bg-gray-50 p-2 rounded text-xs text-gray-700 font-mono break-words h-24 overflow-y-auto">
+              <p class="text-xs text-blue-600 font-semibold mb-2">Window: ${info.pricingWindow || 'N/A'}</p>
+              <div class="bg-gray-50 p-2 rounded text-xs text-gray-700 font-mono break-words h-28 overflow-y-auto">
                 ${isError ? info.message : info.data}
               </div>
             </div>
           `;
-          container.innerHTML += cardHtml;
         }
-      } catch (error) {
-        statusMsg.textContent = "Error connecting to the Cloudflare Worker API.";
+      } catch (e) {
+        document.getElementById('status-message').textContent = "Connection error.";
       }
     }
 
-    // --- MULTI-YEAR CHART LOGIC ---
-    let trendChart;
-    const activeYears = new Set(['2025', '2026']); 
-    
-    // Mock Historical Data (Gallons sold/retained per month)
-    const historicalData = {
-      '2024': [32000, 31000, 34000, 36000, 38000, 41000, 42000, 40000, 37000, 35000, 33000, 31000],
-      '2025': [33000, 31500, 35000, 37000, 39500, 43000, 44000, 42000, 39000, 36000, 34000, 32000],
-      '2026': [34000, 32000, 35500, 38000, 40000, 44000, 46000, 43500, 40000, 37000, null, null] // Nov/Dec empty
-    };
+    async function forcePoll() {
+      const btn = document.getElementById('poll-btn');
+      btn.innerHTML = "Polling TLS-350...";
+      btn.disabled = true;
+      try {
+        await fetch(`${BASE_URL}/api/poll-now`, { method: "POST" });
+        await fetchInventory();
+      } catch (e) { alert("Polling failed."); }
+      btn.innerHTML = "Get Current Fuel Readings";
+      btn.disabled = false;
+    }
 
-    const chartColors = {
-      '2024': 'rgba(156, 163, 175, 1)', // Gray
-      '2025': 'rgba(96, 165, 250, 1)',  // Light Blue
-      '2026': 'rgba(37, 99, 235, 1)'    // Dark Blue
-    };
+    function generateAdvice() {
+      const adviceBox = document.getElementById('advice-output');
+      adviceBox.innerHTML = "Evaluating market trends and weekend pricing locks...";
+      setTimeout(() => {
+        adviceBox.innerHTML = `<span class="text-green-400 font-bold">Recommendation:</span> WTI crude is consolidating. Since weekend pricing locks through Monday 6 PM, schedule unbranded drops to optimize your cost basis.`;
+      }, 800);
+    }
 
-    function initChart() {
-      const ctx = document.getElementById('trendChart').getContext('2d');
-      trendChart = new Chart(ctx, {
-        type: 'line',
-        data: {
-          labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
-          datasets: [] // Populated by updateChart()
-        },
+    async function loadSites() {
+      const tbody = document.getElementById('site-list-table');
+      try {
+        const res = await fetch(`${BASE_URL}/api/sites`);
+        const sites = await res.json();
+        tbody.innerHTML = "";
+        sites.forEach(site => {
+          tbody.innerHTML += `
+            <tr class="border-b">
+              <td class="p-3 font-semibold">${site.name}</td>
+              <td class="p-3">${site.ip}:${site.port}</td>
+              <td class="p-3">${site.controlCode || '250'}</td>
+              <td class="p-3"><button onclick="deleteSite('${site.name}')" class="text-red-600 hover:underline">Remove</button></td>
+            </tr>
+          `;
+        });
+      } catch(e) {
+        tbody.innerHTML = `<tr><td colspan="4" class="p-3 text-red-500">Could not connect to backend API.</td></tr>`;
+      }
+    }
+
+    async function addSite(e) {
+      e.preventDefault();
+      const site = {
+        name: document.getElementById('site-name').value,
+        address: document.getElementById('site-address').value,
+        tel: document.getElementById('site-tel').value,
+        ip: document.getElementById('site-ip').value,
+        port: document.getElementById('site-port').value,
+        controlCode: document.getElementById('site-code').value
+      };
+      await fetch(`${BASE_URL}/api/sites`, { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(site) });
+      document.getElementById('add-site-form').reset();
+      loadSites();
+    }
+
+    async function deleteSite(name) {
+      await fetch(`${BASE_URL}/api/sites`, { method: "DELETE", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ name }) });
+      loadSites();
+    }
+
+    fetchInventory();
+  </script>
+</body>
+</html>
