@@ -1,91 +1,139 @@
-import { connect } from 'cloudflare:sockets';
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fueling Trends Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Load Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-100 p-6 font-sans">
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-};
+  <div class="max-w-6xl mx-auto">
+    <header class="flex justify-between items-center mb-8">
+      <div>
+        <h1 class="text-3xl font-bold text-gray-800">Fueling Trends Dashboard</h1>
+        <p class="text-gray-500 mt-1">Real-time Veeder-Root Polling & Market Analytics</p>
+      </div>
+      <button onclick="fetchInventory()" class="bg-blue-600 text-white px-4 py-2 rounded shadow hover:bg-blue-700 transition">
+        Refresh Live Data
+      </button>
+    </header>
 
-export default {
-  // 1. Handle HTTP Requests (Dashboard API & PDF Uploads)
-  async fetch(request, env, ctx) {
-    if (request.method === "OPTIONS") {
-      return new Response(null, { headers: corsHeaders });
-    }
+    <!-- TOP ROW: Analytics & Market Trends -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+      
+      <!-- Multi-Year Chart Panel -->
+      <div class="lg:col-span-2 bg-white rounded-lg shadow-md p-6">
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="text-xl font-bold text-gray-800">Inventory Volume Trends</h2>
+          
+          <!-- Year Selection Buttons -->
+          <div class="flex space-x-2" id="year-filters">
+            <button onclick="toggleYear('2024')" id="btn-2024" class="px-3 py-1 rounded border border-gray-300 text-sm font-semibold transition bg-gray-200">2024</button>
+            <button onclick="toggleYear('2025')" id="btn-2025" class="px-3 py-1 rounded border border-blue-600 text-blue-600 text-sm font-semibold transition bg-blue-50">2025</button>
+            <button onclick="toggleYear('2026')" id="btn-2026" class="px-3 py-1 rounded border border-blue-600 bg-blue-600 text-white text-sm font-semibold transition">2026</button>
+          </div>
+        </div>
+        <canvas id="trendChart" height="100"></canvas>
+      </div>
 
-    const url = new URL(request.url);
+      <!-- Market Trends Panel -->
+      <div class="bg-white rounded-lg shadow-md p-6 border-l-4 border-indigo-500">
+        <h2 class="text-xl font-bold text-gray-800 mb-4">Current Market Trends</h2>
+        <div class="space-y-4">
+          <div class="flex justify-between pb-2 border-b">
+            <span class="text-gray-600">WTI Crude Oil</span>
+            <span class="font-bold text-red-600">$95.24 / bbl ↓</span>
+          </div>
+          <div class="flex justify-between pb-2 border-b">
+            <span class="text-gray-600">National Avg Gas</span>
+            <span class="font-bold text-green-600">$2.83 / gal ↑</span>
+          </div>
+          <div class="flex justify-between pb-2 border-b">
+            <span class="text-gray-600">Seasonal Demand</span>
+            <span class="font-bold text-gray-800">Winter-Blend</span>
+          </div>
+          <div class="mt-4 pt-2">
+            <p class="text-xs text-gray-500 italic">
+              <strong>Analysis:</strong> Drivers are currently seeing lower pump prices as winter-blend fuel enters the market and refinery maintenance concludes. However, WTI crude remains volatile near $95-$100/bbl due to ongoing geopolitical tensions in the Strait of Hormuz.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
 
-    // Endpoint for HTML Dashboard to fetch latest inventory
-    if (url.pathname === "/api/inventory-status" && request.method === "GET") {
-      const data = await env.INVENTORY_DB.get("latest_inventory");
-      return new Response(data || JSON.stringify({ status: "No data available yet" }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    <!-- BOTTOM ROW: Live Veeder-Root Cards -->
+    <h2 class="text-xl font-bold text-gray-800 mb-4">Live Tank Status</h2>
+    <div id="status-message" class="text-blue-600 font-semibold mb-4">Fetching latest Veeder-Root data...</div>
+    <div id="dashboard-cards" class="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <!-- Cards injected here -->
+    </div>
+  </div>
 
-    // Endpoint for Google Apps Script to send PDF metadata
-    if (url.pathname === "/upload-pdf" && request.method === "POST") {
-      try {
-        const payload = await request.json();
-        console.log("PDF Upload received:", payload);
-        // You can also store this in KV if needed:
-        // await env.INVENTORY_DB.put("latest_invoice", JSON.stringify(payload));
-        return new Response("PDF received and logged.", { status: 200, headers: corsHeaders });
-      } catch (err) {
-        return new Response("Invalid JSON", { status: 400, headers: corsHeaders });
-      }
-    }
-
-    return new Response("Not Found", { status: 404, headers: corsHeaders });
-  },
-
-  // 2. Handle Cron Triggers (Veeder-Root TCP Polling)
-  async scheduled(event, env, ctx) {
-    console.log("Cron triggered. Fetching Veeder-Root data...");
+  <script>
+    const WORKER_API_URL = "http://localhost:8787/api/inventory-status";
     
-    // Replace with your actual gas station static IPs
-    const stations = [
-      { name: "Shell", ip: "192.168.1.100" },
-      { name: "Exxon", ip: "192.168.1.101" },
-      { name: "Amoco", ip: "192.168.1.102" }
-    ];
+    // --- LIVE VEEDER-ROOT DATA LOGIC ---
+    async function fetchInventory() {
+      const statusMsg = document.getElementById('status-message');
+      const container = document.getElementById('dashboard-cards');
+      
+      statusMsg.textContent = "Fetching latest Veeder-Root data...";
+      container.innerHTML = ""; 
 
-    const inventoryResults = {};
-
-    for (const station of stations) {
       try {
-        // Connect to Veeder-Root TCP Port 10277
-        const socket = connect({ hostname: station.ip, port: 10277 });
-        const writer = socket.writable.getWriter();
-        const reader = socket.readable.getReader();
+        const response = await fetch(WORKER_API_URL);
+        const data = await response.json();
 
-        // Send Veeder-Root Inventory Command (I20100 is standard for inventory)
-        const command = new TextEncoder().encode("\x01I20100\n");
-        await writer.write(command);
+        if (data.status === "No data available yet") {
+           statusMsg.textContent = "No data available in the database yet. Run the cron trigger.";
+           return;
+        }
 
-        // Read response
-        const { value, done } = await reader.read();
-        const responseText = new TextDecoder().decode(value);
-        
-        inventoryResults[station.name] = {
-          status: "Success",
-          data: responseText,
-          timestamp: new Date().toISOString()
-        };
+        statusMsg.textContent = "Last polled: " + new Date().toLocaleTimeString();
 
-        writer.close();
+        for (const [station, info] of Object.entries(data)) {
+          const isError = info.status === "Error";
+          const cardHtml = `
+            <div class="bg-white rounded-lg shadow p-6 border-t-4 ${isError ? 'border-red-500' : 'border-green-500'}">
+              <h3 class="text-lg font-bold text-gray-800 mb-1">${station}</h3>
+              <p class="text-sm text-gray-500 mb-3">Status: <span class="${isError ? 'text-red-600' : 'text-green-600'} font-semibold">${info.status}</span></p>
+              <div class="bg-gray-50 p-2 rounded text-xs text-gray-700 font-mono break-words h-24 overflow-y-auto">
+                ${isError ? info.message : info.data}
+              </div>
+            </div>
+          `;
+          container.innerHTML += cardHtml;
+        }
       } catch (error) {
-        console.error(`Failed to connect to ${station.name}:`, error.message);
-        inventoryResults[station.name] = {
-          status: "Error",
-          message: "Failed to connect to TLS/TCP socket",
-          timestamp: new Date().toISOString()
-        };
+        statusMsg.textContent = "Error connecting to the Cloudflare Worker API.";
       }
     }
 
-    // Save results to Cloudflare KV
-    await env.INVENTORY_DB.put("latest_inventory", JSON.stringify(inventoryResults));
-    console.log("Inventory database updated.");
-  }
-};
+    // --- MULTI-YEAR CHART LOGIC ---
+    let trendChart;
+    const activeYears = new Set(['2025', '2026']); 
+    
+    // Mock Historical Data (Gallons sold/retained per month)
+    const historicalData = {
+      '2024': [32000, 31000, 34000, 36000, 38000, 41000, 42000, 40000, 37000, 35000, 33000, 31000],
+      '2025': [33000, 31500, 35000, 37000, 39500, 43000, 44000, 42000, 39000, 36000, 34000, 32000],
+      '2026': [34000, 32000, 35500, 38000, 40000, 44000, 46000, 43500, 40000, 37000, null, null] // Nov/Dec empty
+    };
+
+    const chartColors = {
+      '2024': 'rgba(156, 163, 175, 1)', // Gray
+      '2025': 'rgba(96, 165, 250, 1)',  // Light Blue
+      '2026': 'rgba(37, 99, 235, 1)'    // Dark Blue
+    };
+
+    function initChart() {
+      const ctx = document.getElementById('trendChart').getContext('2d');
+      trendChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+          datasets: [] // Populated by updateChart()
+        },
