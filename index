@@ -1,0 +1,91 @@
+// worker.js
+import { connect } from 'cloudflare:sockets';
+
+export default {
+  // 1. Handle HTTP requests (Receiving PDFs & Serving Dashboard Data)
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+
+    // Route: Receive PDF data from Google Apps Script
+    if (request.method === "POST" && url.pathname === "/upload-pdf") {
+      const data = await request.json();
+      console.log(`Received PDF: ${data.filename} from ${data.date}`);
+      
+      // Store in Cloudflare KV database
+      await env.INVENTORY_DB.put("latest_invoice", JSON.stringify(data));
+      
+      return new Response("PDF received and logged.", { status: 200 });
+    }
+
+    // Route: Serve Data to your HTML5 Dashboard
+    if (request.method === "GET" && url.pathname === "/api/inventory-status") {
+      // Retrieve the latest scraped data for all sites
+      const shellData = await env.INVENTORY_DB.get("current_status_Shell") || '{"status": "No data"}';
+      const exxonData = await env.INVENTORY_DB.get("current_status_Exxon") || '{"status": "No data"}';
+      const xpressData = await env.INVENTORY_DB.get("current_status_Xpress") || '{"status": "No data"}';
+      
+      const combinedData = {
+        Regas_Shell: JSON.parse(shellData),
+        Regas_Exxon: JSON.parse(exxonData),
+        Regas_Xpress: JSON.parse(xpressData)
+      };
+
+      return new Response(JSON.stringify(combinedData), {
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*" // Allows your HTML dashboard to read it
+        }
+      });
+    }
+
+    return new Response("Not Found", { status: 404 });
+  },
+
+  // 2. Handle Cron Triggers (6 AM and 6 PM automated equipment checks)
+  async scheduled(event, env, ctx) {
+    console.log("Running scheduled Veeder-Root inventory checks...");
+
+    // Array of your locations and their specific IPs/Ports
+    const locations = [
+      { id: "Shell", ip: "199.189.242.170", port: 10277 },
+      { id: "Exxon", ip: "199.189.242.136", port: 10277 },
+      { id: "Xpress", ip: "199.189.242.222", port: 10277 }
+    ];
+    
+    // The command: Control A (Hex 01) + 250 for delivery/inventory reports
+    const VEEDER_ROOT_COMMAND = "\x01250\n";
+    
+    // Loop through all locations to grab inventory via raw TCP socket
+    for (const site of locations) {
+      try {
+        // Open a direct TCP socket to the site controller
+        const socket = connect({ hostname: site.ip, port: site.port });
+        const writer = socket.writable.getWriter();
+        const reader = socket.readable.getReader();
+        
+        // Send the "Control A 250" command
+        const encoder = new TextEncoder();
+        await writer.write(encoder.encode(VEEDER_ROOT_COMMAND));
+        
+        // Read the raw response
+        const { value } = await reader.read();
+        const decoder = new TextDecoder();
+        const rawResponse = decoder.decode(value);
+        
+        // Close the connection
+        await writer.close();
+        
+        // Store the raw output in your database to be matched with your PDF pricing later
+        await env.INVENTORY_DB.put(`current_status_${site.id}`, JSON.stringify({
+          timestamp: new Date().toISOString(),
+          raw_inventory: rawResponse 
+        }));
+        
+        console.log(`Successfully pulled delivery data for ${site.id}`);
+        
+      } catch (error) {
+        console.error(`Failed to reach ${site.id} equipment on port 10277:`, error);
+      }
+    }
+  }
+};
